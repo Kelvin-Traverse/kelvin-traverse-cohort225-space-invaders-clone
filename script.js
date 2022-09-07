@@ -1,336 +1,403 @@
-const SCREEN_WIDTH = 640, SCREEN_HEIGHT = 480;
+//------------------------------------------------------------//
+// Space Invaders Clone (WIP)
+// by Erish Traverse and Kelvin Traverse
+//------------------------------------------------------------//
 
-const entities = [];
+// TODO //----------------------------------------------------//
+//
+// Implement enemy bombs
+//   Otherwise it's less Space Invaders,
+//   and more Space Visitors
+//
+// Implement bunkers
+//
+//------------------------------------------------------------//
 
+// Constants for determining enemy movement
+const enemyMovementStep = 21;
+const enemyDescentStep = 30;
 
-// for testing
-let score = 0;
-//----//
-
-class Entity {
-    _component(component, values) {
-        Object.assign(this, {...component.properties, ...values});
-        this[component.name] = true;
-
-    }
-}
-
-
-class Component {
-    constructor(name, properties={}) {
-        this.name = name;
-        this.properties = properties;
-    }
-}
-
-
-class System {
-    constructor(componentType, handlingFunction) {
-        this.componentType = componentType;
-        this.handlingFunction = handlingFunction;
+// Class to represent an enemy
+class Enemy {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.width = enemyMovementStep * 3 - 8;
+        this.height = enemyDescentStep - 4;
+        this.alive = true;
     }
 
-    run(entities) {
-        for (const entity of entities) {
-            if (entity.hasOwnProperty(this.componentType)) {
-                this.handlingFunction(entity);
-            }
+    // Function to move the enemy by one step (-1 = left, 0 = down, 1 = right)
+    move(direction) {
+        if (direction === 0) {
+            this.y += enemyDescentStep;
+        } else {
+            this.x += direction * enemyMovementStep;
         }
     }
-}
 
-
-class InputSystem {
-    constructor(entities, player) {
-        this.entities = entities;
-        this.player = player;
-
-        this.fireButtonDown = false;
+    // Function for rendering the enemy
+    draw() {
+        if (this.alive) {
+            rect(this.x, this.y, this.width, this.height);
+        }
     }
 
-    run() {
-        if (keyIsDown(UP_ARROW) && ! this.fireButtonDown) {
-            const bullet = new Bullet();
-            bullet.x = this.player.x;
-            this.entities.push(bullet);
-            this.fireButtonDown = true;
-        } else if (!keyIsDown(UP_ARROW)) {
-            this.fireButtonDown = false;
-        }
+    // Function for getting the bounding box for detecting collisions
+    getBoundingBox() {
+        return {
+            x: this.x,
+            y: this.y,
+            w: this.width,
+            h: this.height
+        };
     }
 }
 
+// Class used to group enemies
+class EnemyGroup {
+    constructor(enemyRows) {
 
-class Game {
-    constructor() {
-        this.previousTime;
-        this.lag;
+        this.enemyRows = enemyRows;
+        
+        // Stores how many game ticks must elapse before the enemy group moves
+        //   This gets shorter as more enemies are destroyed.
+        this.moveTicks = 36;
+        this.ticksToNextMove = this.moveTicks;
+        
+        // Stores the current row that will be moved on the next move
+        this.currentRow = 0;
 
-        this.inputSystem = {run: () => null};
-        this.systems = [];
-        this.entities = [];
-    }
+        // Stores the direction to move the group in
+        this.direction = 1;
+        
+        // Stores the position of the group in an imaginary grid
+        this.x = 0;
+        this.y = 0;
 
-    start() {
-        this.lag = 0;
-        this.previousTime = Date.now();
-        this.main();
-    }
-
-    main() {
-        requestAnimationFrame(() => this.main());
-        const currentTime = Date.now();
-        const delta = currentTime - this.previousTime;
-        this.previousTime = currentTime;
-        this.lag += delta;
-        //console.log(this.lag);
-
-        while (this.lag >= 1000 / 60) {
-            //console.log('here');
-            this.update();
-            this.lag -= 1000 / 60;
-        }
-
+        // Used to determine how far left and right the group can go
+        //   `minX` decreases as columns on the left get destroyed
+        //   `maxX` increases as columns on the right get destroyed
+        this.minX = 0;
+        this.maxX = 4;
     }
 
     update() {
-        this.inputSystem.run();
-        for (const system of this.systems) {
-            system.run(this.entities);
+        this.ticksToNextMove--;
+        this.pruneEmptyRows();
+        this.pruneRowEnds();
+        this.updateSpeed();
+
+        // If ticks to next move is 0, move the group
+        if (this.ticksToNextMove === 0) {
+
+            // Determine if the group is at the edge of the screen
+            const edgeReached = (
+                this.x === this.minX && this.direction < 0 ||
+                this.x === this.maxX && this.direction > 0
+            );
+
+            // If the edge has been reached and all row have been updated,
+            // the next move will cause the group to descend by 1 row and
+            // set the new movement direction to the opposite direction
+            //   e.g. if the group was moving left before descending they will
+            //   now start moving right.
+            if (this.currentRow === 0 && edgeReached) {
+                this.enemyRows.forEach(row => {
+                    row.forEach(enemy => enemy.move(0))
+                });
+                this.direction *= -1;
+                this.y++;
+            } 
+            // If the edge has not been reached, just move the current row horizontally
+            else {
+                this.enemyRows[this.currentRow].forEach(enemy => enemy.move(this.direction));
+                this.currentRow = (this.currentRow + 1) % this.enemyRows.length;
+            }
+
+            // If the last row has been updated, start from the first row.
+            if (this.currentRow === this.enemyRows.length - 1) {
+                this.x += this.direction;
+            }
+            
+            // Reset ticks to next move.
+            this.ticksToNextMove = this.moveTicks;
         }
+    }
+
+    // Remove columns of dead enemies from the ends of the rows.
+    // This allows `minX` and `maxX` to be updated so the group can move further horizontally
+    pruneRowEnds() {
+        // Check if leftmost and rightmost enemies are dead in every row.
+        const leftEmpty = this.enemyRows.every(row => !row[0].alive);
+        const rightEmpty = this.enemyRows.every(row => !row[row.length - 1].alive);
+
+        // Remove every column of dead enemies from the coresponding side.
+        for (const row of this.enemyRows) {
+            leftEmpty && row.shift();
+            rightEmpty && row.pop();
+        }
+
+        // Update how far the group can move.
+        leftEmpty && (this.minX -= 3);
+        rightEmpty && (this.maxX += 3);
+    }
+
+    // Remove rows of dead enemies.
+    // This allows empty rows to be skipped on updates
+    pruneEmptyRows() {
+        this.enemyRows = this.enemyRows.filter((row, i) => {
+            const someAlive = row.some(enemy => enemy.alive);
+            if (!someAlive && i < this.currentRow) {
+                this.currentRow--;
+            }
+            return someAlive;
+        });
+        this.currentRow %= this.enemyRows.length;
+    }
+
+    // Increases the speed of the group as enemies are destroyed
+    updateSpeed() {
+        let remainingEnemies = 0;
+        this.enemyRows.forEach(row => {
+            remainingEnemies += row.reduce((p, c) => c.alive ? p + 1 : p, 0)
+        })
+        this.moveTicks = Math.floor(2 + remainingEnemies * 0.85);
+    }
+
+    // Render all enemies in the group
+    draw() {
+        this.enemyRows.forEach(row => {
+            row.forEach(enemy => enemy.draw())
+        });
     }
 }
 
+// Class to represent the player
+class Player {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.speed = 5;
+    }
 
-function collisionDetection(entity1, entity2) {
-    box1 = {
-        x: entity1.boundingBox.x + entity1.x,
-        y: entity1.boundingBox.y + entity1.y,
-        w: entity1.boundingBox.w,
-        h: entity1.boundingBox.h,
+    // Render the player
+    draw() {
+        rect(this.x, this.y, 20, 20);
     }
-    box2 = {
-        x: entity2.boundingBox.x + entity2.x,
-        y: entity2.boundingBox.y + entity2.y,
-        w: entity2.boundingBox.w,
-        h: entity2.boundingBox.h,
+
+    // Move the player
+    update() {
+        if (keyIsDown(LEFT_ARROW)) {
+            this.x -= this.speed;
+        }
+        if (keyIsDown(RIGHT_ARROW)) {
+            this.x += this.speed;
+        }
+
+        // Keep the player within the screen.
+        if (this.x < 40) {
+            this.x = 40;
+        } else if (this.x > 600) {
+            this.x = 600;
+        }
     }
-    if (
-        box1.x < box2.x + box2.w && box1.x + box1.w > box2.x &&
-        box1.y < box2.y + box2.h && box1.y + box1.h > box2.y
-    ) {
+
+    // TODO: Add bounding box function for detecting collision with enemy bombs
+}
+
+// Class representing the player's bullet
+class Bullet {
+    constructor() {
+        this.x = 0;
+        this.y = 0;
+        this.width = 2;
+        this.height = 20;
+        this.active = false;
+    }
+
+    // Update the position of the bullet if it is active, and check if it has
+    // collided with any entity in entities.
+    update(entities) {
+        if (!this.active) {return}
+
+        // Deactivate bullet if it is offscreen
+        if (this.y <= -10) {
+            this.active = false;
+        } else {
+            this.move();
+            for (const entity of entities.filter(entity => entity.alive)) {
+                if (collisionDetection(this.getBoundingBox(), entity.getBoundingBox())) {
+                    entity.alive = false;
+                    this.active = false;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Move bullet
+    move() {
+        this.y -= 8;
+    }
+
+    // Render bullet
+    draw() {
+        if (this.active) {
+            rect(this.x, this.y, 2, 20);
+        }
+    }
+
+    // Returns the bounding box for collision detection
+    getBoundingBox() {
+        return {
+            x: this.x,
+            y: this.y,
+            w: this.width,
+            h: this.height
+        };
+    }
+}
+
+// Class to represent enemy bombs. (Not used yet)
+// TODO: Implement enemy bombs.
+class Bomb {
+    constructor() {
+        this.x = 0;
+        this.y = 0;
+        this.active = false;
+    }
+
+    update() {}
+
+    move() {}
+    
+    draw() {}
+}
+
+// Function for detecting collisions using bounding boxes.
+function collisionDetection(boundingBox1, boundingBox2) {
+    const {x: x1, y: y1, w: w1, h: h1} = boundingBox1;
+    const {x: x2, y: y2, w: w2, h: h2} = boundingBox2;
+
+    if (x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2) {
         return true;
     }
     return false;
 }
 
-const healthComponent = new Component('healthComponent', {health: 1});
-const positionComponent = new Component('positionComponent', {x: 0, y: 0});
-const rotationComponent = new Component('rotationComponent', {rotation: 0});
-const velocityComponent = new Component('velocityComponent', {xVel: 2, yVel: 0});
-const renderComponent = new Component('renderComponent');
-const collisionComponent = new Component('collisionComponent', {boundingBox: {x: 0, y: 0, w: 0, h: 0}});
-const animationComponent = new Component('animationComponent', {animationTick: 0, animation: 'idle'});
+// Create and store Enemy objects to be passed to an EnemyGroup object.
+const enemies = [];
 
-const movementSystem = new System('positionComponent', (entity) => {
-    entity.move();
-})
-
-const renderSystem = new System('renderComponent', (entity) => {
-    entity.draw();
-})
-
-const animationSystem = new System('animationComponent', (entity) => {
-    entity.animate()
-});
-
-const collisionSystem = new System('collisionComponent', (entity1, entity2) => {
-    if (entity1 !== entity2) {
-        if (collisionDetection(entity1, entity2)) {
-            //console.log('collision');
-            score++;
-            return true;
-        }
+for (let i = 0; i < 5; i++) {
+    const enemyRow = []
+    for (let j = 0; j < 8; j++) {
+        const enemy = new Enemy(50 + j * enemyMovementStep * 3, 50 + i * enemyDescentStep);
+        enemyRow.push(enemy);
     }
-})
+    enemies.push(enemyRow);
+}
 
-collisionSystem.run = (entity1, entities) => {
-    for (const entity of entities) {
-        if (collisionSystem.handlingFunction(entity1, entity)) {
-            return true;
+// Create an enemy group object.
+const enemyGroup = new EnemyGroup(enemies.reverse());
+
+// Create the Player and Bullet objects.
+const player = new Player(320, 400);
+const bullet = new Bullet();
+
+
+//-- Test Stuff ----------------------------------------------//
+let destroyedLastColumn = false;
+const destroyLastColumn = () => {
+    if (!destroyedLastColumn) {
+        for (const row of enemyGroup.enemyRows) {
+            row[row.length - 1].alive = false;
         }
+        //destroyedLastColumn = true;
     }
 }
 
-class Player extends Entity {
-    constructor() {
-        super();
-        this._component(positionComponent, {
-            x: SCREEN_WIDTH / 2, 
-            y: SCREEN_HEIGHT - 35
-        });
-        this._component(healthComponent);
-        this._component(renderComponent);
-        this._component(collisionComponent);
+let destroyedTopRow = false;
+const destroyTopRow = () => {
+    if (!destroyedLastColumn) {
+        for (const enemy of enemyGroup.enemyRows[enemyGroup.enemyRows.length - 1]) {
+            enemy.alive = false;
+        }
+        //destroyedTopRow = true;
     }
+}
+//------------------------------------------------------------//
 
-    move() {
-        if (keyIsDown(LEFT_ARROW)) {
-            this.x -= 10;
-        }
-        if (keyIsDown(RIGHT_ARROW)) {
-            this.x += 10;
-        }
-        if (this.x < 10) {
-            this.x = 10;
-        } else if (this.x > SCREEN_WIDTH - 10) {
-            this.x = SCREEN_WIDTH - 10;
-        }
-    }
 
-    draw() {
-        fill(50, 100, 200);
-        ellipse(this.x, this.y, 50, 50);
+
+
+// Set up the game loop.
+let tick = 0;
+const updatesPerSecond = 60;
+const tickLength = 1000 / updatesPerSecond;
+
+let previousTime;
+let timeSinceLastTick = 0;
+
+//-- Game Loop --//
+const update = () => {
+    requestAnimationFrame(update);
+
+    const currentTime = Date.now();
+    const deltaTime = currentTime - previousTime;
+    previousTime = currentTime;
+
+    timeSinceLastTick += deltaTime;
+
+    while (timeSinceLastTick > tickLength) {
+        tick++;
+
+        player.update();
+
+        // Pass list of enemies to the bullet update function to
+        // detect collisions
+        bullet.update(enemies.reduce((p, c) => [...p, ...c], []));
+        enemyGroup.update();
+
+        timeSinceLastTick -= tickLength;
     }
 }
 
-class Enemy extends Entity {
-    constructor(position) {
-        super();
-        this._component(positionComponent, position);
-        this._component(rotationComponent);
-        this._component(velocityComponent);
-        this._component(healthComponent);
-        this._component(renderComponent);
-        this._component(animationComponent, {animation: 'moving'});
-        this._component(collisionComponent, {boundingBox: {x: -15, y: -15, w: 30, h: 30}});
-    }
-
-    animate() {
-        this.animationTick++;
-        if (this.animation === 'descending') {
-            this.rotation += PI / 15;
-            if (this.animationTick > 15) {
-                this.rotation = 0;
-                this.animation = 'moving';
-                this.animationTick = 0;
-            }
-        }
-    }
-
-    move() {
-        if (this.animation === 'descending') {
-            this.y += 2;
-        }
-        if (this.animation !== 'moving') {
-            return;
-        }
-        this.x += this.xVel;
-        let edgeReached = false;
-        if (this.x <= 15) {
-            this.x = 15;
-            edgeReached = true;
-        } else if (this.x >= SCREEN_WIDTH - 15) {
-            this.x = SCREEN_WIDTH - 15;
-            edgeReached = true;
-        }
-        if (edgeReached) {
-            this.xVel = -this.xVel * 1.4;
-            this.animationTick = 0;
-            this.animation = 'descending';
-        }
-        if (this.y >= SCREEN_HEIGHT - 40) {
-            this.reset();
-        }
-        if (collisionSystem.run(this, entities)) {
-            this.reset();
-        }
-    }
-
-    // for testing
-    reset() {
-        this.x = SCREEN_WIDTH / 2;
-        this.y = 25;
-        this.xVel = 2;
-    }
-    //----//
-
-    draw() {
-        push();
-        translate(this.x, this.y);
-        rotate(this.rotation);
-        fill(200, 50, 100);
-        rect(0, 0, 30, 30);
-        pop();
-    }
+// Function to start the game.
+const start = () => {
+    previousTime = Date.now();
+    update();
 }
 
-class Bullet extends Entity {
-    constructor() {
-        super();
-        this._component(positionComponent, {y: SCREEN_HEIGHT - 35});
-        this._component(velocityComponent, {xVel: 0, yVel: -8});
-        this._component(renderComponent);
-        this._component(collisionComponent, {boundingBox: {x: -2.5, y: -2.5, w: 5, h: 5}});
-    }
-
-    draw() {
-        push();
-        translate(this.x, this.y);
-        fill(80, 200, 80);
-        rect(0, 0, 5, 5);
-        pop();
-    }
-
-    move() {
-        this.y += this.yVel;
-        collisionSystem.run(this, entities);
-    }
-}
-
-
-//const entities = [];
-
-const player = new Player();
-
-entities.push(player);
-entities.push(new Enemy(
-    position = {x: SCREEN_WIDTH / 2 - 15, y: 25}
-));
-
-//function updateGame() {
-//    movementSystem.run(entities);
-//    animationSystem.run(entities);
-//}
-
-
-
-game = new Game();
-game.inputSystem = new InputSystem(entities, player);
-game.systems = [
-    movementSystem,
-    animationSystem,
-];
-
-game.entities = entities;
-
+// Function to setup the canvas for rendering the game.
 function setup() {
-    createCanvas(SCREEN_WIDTH, SCREEN_HEIGHT);
+    createCanvas(640, 480);
     background(200);
-    rectMode(CENTER);
 
-    requestAnimationFrame(() => game.start());
+    // Start the game.
+    start();
 }
 
+// Handle some inputs.
+function keyPressed() {
+    if (keyCode === 38) {
+        destroyLastColumn();
+    } else if (keyCode === 40) {
+        destroyTopRow();
+    }
+    // Spacebar to fire bullet if it is inactive.
+    else if (keyCode === 32 && !bullet.active) {
+        bullet.x = player.x;
+        bullet.y = player.y;
+        bullet.active = true;
+    }
+}
 
-
+// Function for rendering the game.
 function draw() {
-    clear();
     background(200);
-    // for testing
-    textSize(32);
-    fill(30);
-    text(`Collisions: ${score}`, 10, 30);
-    //----//
-    renderSystem.run(entities);
+
+    enemyGroup.draw();
+    player.draw();
+    bullet.draw();
 }
