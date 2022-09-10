@@ -173,17 +173,64 @@ class EnemyGroup {
     }
 }
 
+// Class to represent the UFO
+class UFO {
+    constructor() {
+        this.x = 0;
+        this.y = 0;
+        this.speed = 0;
+        this.width = 70;
+        this.height = 30;
+        this.bonus = 200;
+        this.alive = false;
+    }
+
+    // Function to move the UFO
+    update() {
+        if (!this.alive) {return}
+
+        this.x += this.speed;
+
+        // Deactivate UFO if it is offscreen
+        if (this.y <= -30) {
+            this.alive = false;
+        } 
+    }
+
+    // Function for rendering the UFO
+    draw() {
+        if (this.alive) {
+            rect(this.x, this.y, this.width, this.height);
+        }
+    }
+
+    // Function for getting the bounding box for detecting collisions
+    getBoundingBox() {
+        return {
+            x: this.x,
+            y: this.y,
+            w: this.width,
+            h: this.height
+        };
+    }
+}
+
 // Class to represent the player
 class Player {
     constructor(x, y) {
         this.x = x;
         this.y = y;
+        this.height = 20;
+        this.width = 20;
         this.speed = 5;
+        this.lives = 4;
     }
 
     // Render the player
     draw() {
-        rect(this.x, this.y, 20, 20);
+        if (this.lives > 0) {
+            rect(this.x, this.y, this.width, this.height);
+        }
     }
 
     // Move the player
@@ -203,7 +250,15 @@ class Player {
         }
     }
 
-    // TODO: Add bounding box function for detecting collision with enemy bombs
+    // Function for getting the bounding box for detecting collisions
+    getBoundingBox() {
+        return {
+            x: this.x,
+            y: this.y,
+            w: this.width,
+            h: this.height
+        };
+    }
 }
 
 // Class representing the player's bullet
@@ -244,7 +299,7 @@ class Bullet {
     // Render bullet
     draw() {
         if (this.active) {
-            rect(this.x, this.y, 2, 20);
+            rect(this.x, this.y, this.width, this.height);
         }
     }
 
@@ -259,20 +314,50 @@ class Bullet {
     }
 }
 
-// Class to represent enemy bombs. (Not used yet)
-// TODO: Implement enemy bombs.
+// Class to represent enemy bombs. 
 class Bomb {
     constructor() {
         this.x = 0;
         this.y = 0;
+        this.width = 4;
+        this.height = 10;
         this.active = false;
     }
 
-    update() {}
+    update(entity) {
+        if (!this.active) {return}
 
-    move() {}
+        // Deactivate bomb if it hits the ground
+        if (this.y >= 480) {
+            this.active = false;
+        } else {
+            this.move();
+            if (collisionDetection(this.getBoundingBox(), entity.getBoundingBox())) {
+                entity.lives--;
+                this.active = false;
+            }
+        }
+        this.move();
+    }  
     
-    draw() {}
+    move() {
+        this.y += 2;
+    }
+    
+    draw() {
+        if (this.active) {
+            rect(this.x, this.y, this.width, this.height);
+        }
+    }
+
+    getBoundingBox() {
+        return {
+            x: this.x,
+            y: this.y,
+            w: this.width,
+            h: this.height
+        };
+    }
 }
 
 // Function for detecting collisions using bounding boxes.
@@ -300,6 +385,12 @@ for (let i = 0; i < 5; i++) {
 
 // Create an enemy group object.
 const enemyGroup = new EnemyGroup(enemies.reverse());
+
+// Create the UFO object
+const ufo = new UFO();
+
+// Create the bomb object
+const bomb = new Bomb();
 
 // Create the Player and Bullet objects.
 const player = new Player(320, 400);
@@ -354,10 +445,14 @@ const update = () => {
 
         player.update();
 
+        ufo.update();
+
         // Pass list of enemies to the bullet update function to
         // detect collisions
-        bullet.update(enemies.reduce((p, c) => [...p, ...c], []));
+        bullet.update([...enemies.reduce((p, c) => [...p, ...c], []), ufo]);
         enemyGroup.update();
+
+        bomb.update(player);
 
         timeSinceLastTick -= tickLength;
     }
@@ -378,6 +473,33 @@ function setup() {
     start();
 }
 
+// Function to randomly drop a bomb
+function dropBomb() {
+    const lastEnimeyInCol = new Array(enemies[0].length).fill(null);
+
+    enemies.forEach ( row => {
+        for (let i = 0; i < row.length; i++) {
+            if ( lastEnimeyInCol[i] === null && row[i].alive === true) {
+                lastEnimeyInCol[i] = row[i];
+            }
+        }
+    } );
+ 
+    let bomber = lastEnimeyInCol[Math.floor(Math.random() * lastEnimeyInCol.length)];
+
+    bomb.x = bomber.x;
+    bomb.y = bomber.y;
+    bomb.active = true;
+}
+
+// Function to randomly spawn UFO
+function spawnUFO() {
+    ufo.x = 670;
+    ufo.y = 10;
+    ufo.speed = -6;
+    ufo.alive = true;
+}
+
 // Handle some inputs.
 function keyPressed() {
     if (keyCode === 38) {
@@ -385,6 +507,17 @@ function keyPressed() {
     } else if (keyCode === 40) {
         destroyTopRow();
     }
+    
+    // b to drop bomb for test
+    else if (keyCode === 66) {
+        dropBomb();
+    }
+
+    // u to spawn UFO for test
+    else if (keyCode === 85) {
+        spawnUFO();
+    }
+
     // Spacebar to fire bullet if it is inactive.
     else if (keyCode === 32 && !bullet.active) {
         bullet.x = player.x;
@@ -400,4 +533,10 @@ function draw() {
     enemyGroup.draw();
     player.draw();
     bullet.draw();
+    bomb.draw();
+    ufo.draw();
+
+    for (let i = 0; i < player.lives - 1; i++) {
+        rect(10 + i * 40, 450, 20, 20);
+    }
 }
